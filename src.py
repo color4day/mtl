@@ -850,3 +850,33 @@ class MtlDeepGP(PyroModule):
         dy2dx2 = self.GP2.pred(z) * 1/2 @ self.GPcommon.pred(x2)
         dmu = [[dy1dx1, dy2dx1], [dy1dx2, dy2dx2]]
         return dmu
+    
+
+
+class MtlDeepGP_classification(PyroModule):
+    def __init__(self, dim_list=[1, 1], dim1_list = [1, 3], dim2_list = [1, 3], J_list=[10],J1_list=[10], J2_list=[10]):
+        super().__init__()
+        self.num_classes1 = dim1_list[-1]
+        self.num_classes2 = dim2_list[-1]
+        # self.out_dim = dim_list[-1]
+        self.GPcommon = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+        self.GP1 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
+        self.GP2 = DeepGPNoBias(dim_list=dim2_list, J_list=J2_list)
+        # self.model.to('cpu')
+
+    def forward(self, x, y=None):
+        x1 = x[:,0:1]
+        x2 = x[:,1:2]
+        z1 = self.GPcommon(x1)
+        z2 = self.GPcommon(x2)
+        z = 1/2 * (z1 + z2)
+        self.z = z
+        # z = z1
+        y1 = self.GP1(z)
+        y2 = self.GP2(z)
+        y11 = torch.softmax(y1, dim=1)
+        y22 = torch.softmax(y2, dim=1)
+        y = torch.cat((y11, y22), dim=1)
+        mu = y
+
+        return mu

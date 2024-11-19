@@ -102,6 +102,7 @@ class SingleGPNoBias(PyroModule):
     def pred(self, x: Tensor) -> Tensor:
         z = self.layers[0](x)
         dmu = self.layers[1].pred(z) @ self.layers[0].pred(x)
+        # dmu = self.layers[0].pred(x) @ self.layers[1].pred(z)
         return dmu
 
 class SingleGP(PyroModule):
@@ -356,6 +357,9 @@ class FirstLayer(PyroModule):
     def pred(self, x: Tensor) -> Tensor:
         hid = self.layer(x).squeeze()
         dmu = torch.cat((torch.diag(torch.cos(hid)), -torch.diag(torch.sin(hid))), dim=0) / torch.sqrt(torch.tensor(self.J)) @ self.layer.weight
+        # print(dmu.shape)
+        # print(self.layer.weight.shape)
+        # dmu = self.layer.weight @ torch.cat((torch.diag(torch.cos(hid)), -torch.diag(torch.sin(hid))), dim=0) / torch.sqrt(torch.tensor(self.J))
         return dmu
 
     # init_w = None,
@@ -500,7 +504,7 @@ class SecondLayer(PyroModule):
         return mu
     
     def pred(self, x: Tensor) -> Tensor:
-        dmu = self.layer.weight.T
+        dmu = self.layer.weight
         return dmu
 
 class SingleLayerFix(PyroModule):
@@ -803,9 +807,11 @@ class DeepGPNoBias(PyroModule):
         return x
     
     def pred(self, x: Tensor) -> Tensor:
-        dmu = torch.ones(1)
+        # dmu = torch.ones(1)
+        dmu = torch.eye(x.shape[1])
         for i in range(len(self.layers)):
             dmu = self.layers[i].pred(x) @ dmu
+            # dmu = dmu @ self.layers[i].pred(x)
             x = self.layers[i](x)
         return dmu
 
@@ -848,9 +854,42 @@ class MtlDeepGP(PyroModule):
         dy2dx1 = self.GP2.pred(z) * 1/2 @ self.GPcommon.pred(x1)
         dy1dx2 = self.GP1.pred(z) * 1/2 @ self.GPcommon.pred(x2)
         dy2dx2 = self.GP2.pred(z) * 1/2 @ self.GPcommon.pred(x2)
+        # dy1dx1 = self.GPcommon.pred(x1) @ self.GP1.pred(z) * 1/2
+        # dy2dx1 = self.GPcommon.pred(x1) @ self.GP2.pred(z) * 1/2
+        # dy1dx2 = self.GPcommon.pred(x2) @ self.GP1.pred(z) * 1/2
+        # dy2dx2 = self.GPcommon.pred(x2) @ self.GP2.pred(z) * 1/2
         dmu = [[dy1dx1, dy2dx1], [dy1dx2, dy2dx2]]
         return dmu
     
+
+
+# class MtlDeepGP_classification(PyroModule):
+#     def __init__(self, dim_list=[1, 1], dim1_list = [1, 3], dim2_list = [1, 3], J_list=[10],J1_list=[10], J2_list=[10]):
+#         super().__init__()
+#         self.num_classes1 = dim1_list[-1]
+#         self.num_classes2 = dim2_list[-1]
+#         # self.out_dim = dim_list[-1]
+#         self.GPcommon = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+#         self.GP1 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
+#         self.GP2 = DeepGPNoBias(dim_list=dim2_list, J_list=J2_list)
+#         # self.model.to('cpu')
+
+#     def forward(self, x, y=None):
+#         x1 = x[:,0:1]
+#         x2 = x[:,1:2]
+#         z1 = self.GPcommon(x1)
+#         z2 = self.GPcommon(x2)
+#         z = 1/2 * (z1 + z2)
+#         self.z = z
+#         # z = z1
+#         y1 = self.GP1(z1)
+#         y2 = self.GP2(z2)
+#         y11 = torch.softmax(y1, dim=1)
+#         y22 = torch.softmax(y2, dim=1)
+#         y = torch.cat((y11, y22), dim=1)
+#         mu = y
+
+#         return mu
 
 
 class MtlDeepGP_classification(PyroModule):
@@ -859,7 +898,8 @@ class MtlDeepGP_classification(PyroModule):
         self.num_classes1 = dim1_list[-1]
         self.num_classes2 = dim2_list[-1]
         # self.out_dim = dim_list[-1]
-        self.GPcommon = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+        self.GPcommon1 = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+        self.GPcommon2 = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
         self.GP1 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
         self.GP2 = DeepGPNoBias(dim_list=dim2_list, J_list=J2_list)
         # self.model.to('cpu')
@@ -867,8 +907,8 @@ class MtlDeepGP_classification(PyroModule):
     def forward(self, x, y=None):
         x1 = x[:,0:1]
         x2 = x[:,1:2]
-        z1 = self.GPcommon(x1)
-        z2 = self.GPcommon(x2)
+        z1 = self.GPcommon1(x1)
+        z2 = self.GPcommon2(x2)
         z = 1/2 * (z1 + z2)
         self.z = z
         # z = z1
@@ -880,3 +920,208 @@ class MtlDeepGP_classification(PyroModule):
         mu = y
 
         return mu
+    
+
+
+##########################################################################################
+# PyroSample(dist.Normal(1., torch.tensor(1.0)).expand([out_dim, hid_dim]).to_event(2))
+class Deconfounder_z2x(PyroModule): 
+    def __init__(self, dim_list=[1, 1], J_list=[10], shared_z=None):
+        super().__init__()
+        self.GP = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+        self.confounder = shared_z
+        self.out_dim = dim_list[-1]
+
+    def forward(self, x=None):
+        z = self.confounder
+        x = self.GP(z)
+        mu = x
+        return mu
+
+        # scale = pyro.sample("sigma", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.out_dim) 
+        # # Sampling model
+        # with pyro.plate("data", x.shape[0]): 
+        #     obs = pyro.sample("obs", dist.MultivariateNormal(mu.cpu(), torch.diag(scale * scale).cpu()), obs=x)
+        # return obs
+
+
+class Deconfounder_zx2y(PyroModule): 
+    def __init__(self, dim_list=[1, 1], J_list=[10], shared_z=None):
+        super().__init__()
+        self.GP = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+        self.confounder = shared_z
+        self.out_dim = dim_list[-1]
+
+    def forward(self, x, y=None):
+        z = self.confounder
+        v = torch.cat((z, x), dim=-1)
+        y = self.GP(v)
+        mu = y
+        return mu
+
+        # scale = pyro.sample("sigma", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.out_dim) 
+        # # Sampling model
+        # with pyro.plate("data", x.shape[0]): 
+        #     obs = pyro.sample("obs", dist.MultivariateNormal(mu.cpu(), torch.diag(scale * scale).cpu()), obs=y)
+        # return obs
+    
+
+    
+####################################################################################
+class Deconfounder_z2x_v2(PyroModule): 
+    def __init__(self, dim_list=[1, 1], J_list=[10], shared_z=None):
+        super().__init__()
+        # self.GPs = []
+        # for i in range(num_classes):
+        #     self.GPs.append(DeepGPNoBias(dim_list=dim_list, J_list=J_list))
+        self.GP = DeepGPNoBias(dim_list=dim_list, J_list=J_list)
+        self.confounder = shared_z
+        self.out_dim = dim_list[-1]
+
+    def forward(self, c, x=None):
+        z = self.confounder[c.squeeze()]
+        x = self.GP(z)
+        mu = x
+        return mu
+
+
+class Deconfounder_zx2y_v2(PyroModule): 
+    def __init__(self, dim_list=[1, 1], J_list=[10], shared_z=None):
+        super().__init__()
+        n_class = shared_z.shape[0]
+        self.GP = DeepGPNoBias_c(dim_list=dim_list, J_list=J_list, n_class=n_class)
+        # self.GPs = []
+        # for i in range(n_class):
+        #     self.GPs.append(DeepGPNoBias(dim_list=dim_list, J_list=J_list))
+        self.confounder = shared_z
+        self.out_dim = dim_list[-1]
+
+    def forward(self, x, c, y=None):
+        z = self.confounder[c.squeeze()]
+        # print(c.shape)
+        # print(z.shape)
+        v = torch.cat((z, x), dim=-1)
+        y = self.GP(v, c)
+        mu = y
+        return mu
+    
+
+
+class DeepGPNoBias_c(PyroModule):
+    def __init__(
+            self,
+            dim_list = None,
+            J_list = None,
+            n_class = 1
+    ) -> None:
+        super().__init__()
+        # for i in range(len(dim_list)-1):
+        #     dim_list[i] = dim_list[i] * n_class
+
+        in_dim_list = dim_list[:-1]
+        out_dim_list = dim_list[1:]
+
+        in_dim_list[0] = in_dim_list[0] * n_class
+        self.n_class = n_class
+
+        assert min(in_dim_list) > 0 and min(out_dim_list) > 0 and min(J_list) > 0  # make sure the dimensions are valid
+
+        # Define the PyroModule layer list
+        layer_list = []
+        for i in range(len(in_dim_list)):
+            layer_list.append(SingleGPNoBias(in_dim_list[i], out_dim_list[i], J_list[i]))
+   
+        print(layer_list)
+        self.layers = PyroModule[torch.nn.ModuleList](layer_list)
+
+    def forward(
+            self,
+            x: Tensor,
+            c
+    ) -> Tensor:
+        """
+        :param x: Tensor
+            The input into the Single GP
+        :return:
+            The output of the Single GP
+        """
+        xx = x.unsqueeze(1).repeat(1, self.n_class, 1) * 0
+        xx[:, c.squeeze(), :] = x
+        xx = xx.reshape(x.shape[0], x.shape[1] * self.n_class)
+        for i in range(len(self.layers)):
+            xx = self.layers[i](xx)
+        return xx
+    
+    def pred(self, x: Tensor, c) -> Tensor:
+        dmu = torch.ones(1)
+        xx = x.unsqueeze(1).repeat(1, self.n_class, 1) * 0
+        xx[:, c.squeeze(), :] = x
+        xx = xx.reshape(x.shape[0], x.shape[1] * self.n_class)
+        for i in range(len(self.layers)):
+            dmu = self.layers[i].pred(xx) @ dmu
+            xx = self.layers[i](xx)
+        return dmu
+    
+
+    
+####################################################################################
+class Model_Nov17(PyroModule):
+    def __init__(self, dim_list=[1, 1], dim1_list = [1, 3], dim2_list = [1, 3], J_list=[10],J1_list=[10], J2_list=[10]):
+        super().__init__()
+        self.GP1 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
+        self.GP2 = DeepGPNoBias(dim_list=dim2_list, J_list=J2_list)
+        self.GP3 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
+
+        self.GP31 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
+        self.GP32 = DeepGPNoBias(dim_list=dim2_list, J_list=J2_list)
+
+    def forward(self, x1, x2, x3, y1=None, y2=None):
+        mu1 = self.GP1(x1)
+        mu2 = self.GP2(x2)
+
+        z = self.GP3(x3)
+        mu31 = self.GP31(z)
+        mu32 = self.GP32(z)
+        
+        scale1 = pyro.sample("sigma1", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.y1_dim) 
+        scale2 = pyro.sample("sigma3", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.y2_dim)
+        scale31 = pyro.sample("sigma21", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.y1_dim)
+        scale32 = pyro.sample("sigma22", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.y2_dim) 
+        # Sampling model
+        with pyro.plate("data", x1.shape[0]): 
+            obs1 = pyro.sample("obs1", dist.MultivariateNormal(mu1.cpu(), torch.diag(scale1 * scale1).cpu()), obs=y1)
+            obs2 = pyro.sample("obs2", dist.MultivariateNormal(mu2.cpu(), torch.diag(scale2 * scale2).cpu()), obs=y2)
+            obs31 = pyro.sample("obs31", dist.MultivariateNormal(mu31.cpu(), torch.diag(scale31 * scale31).cpu()), obs=y1)
+            obs32 = pyro.sample("obs32", dist.MultivariateNormal(mu32.cpu(), torch.diag(scale32 * scale32).cpu()), obs=y2)
+        return obs1, obs2, obs31, obs32
+    
+
+
+####################################################################################
+class Model_Nov18(PyroModule):
+    def __init__(self, dim1_list=[1, 1], dim2_list = [1, 1], dim3_list = [1, 1], dim31_list=[2, 1], dim32_list=[2, 1],  J1_list=[10], J2_list=[10], J3_list=[10],  J31_list=[10], J32_list=[10]):
+        super().__init__()
+        self.GP1 = DeepGPNoBias(dim_list=dim1_list, J_list=J1_list)
+        self.GP2 = DeepGPNoBias(dim_list=dim2_list, J_list=J2_list)
+        self.GP3 = DeepGPNoBias(dim_list=dim3_list, J_list=J3_list)
+
+        self.GP31 = DeepGPNoBias(dim_list=dim31_list, J_list=J31_list)
+        self.GP32 = DeepGPNoBias(dim_list=dim32_list, J_list=J32_list)
+
+    def forward(self, x1, x2, x3, y1=None, y2=None):
+        xx1 = self.GP1(x1)
+        xx2 = self.GP2(x2)
+        
+        xx3 = self.GP3(x3)
+        z1 = torch.cat((xx3, xx1), dim=-1)
+        mu1 = self.GP31(z1)
+        z2 = torch.cat((xx3, xx2), dim=-1)
+        mu2 = self.GP32(z2)
+        
+        scale1 = pyro.sample("sigma1", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.y1_dim)
+        scale2 = pyro.sample("sigma2", dist.Gamma(torch.tensor(0.5, device='cpu'), torch.tensor(1.0, device='cpu'))).expand(self.y2_dim) 
+        # Sampling model
+        with pyro.plate("data", x1.shape[0]): 
+            obs1 = pyro.sample("obs1", dist.MultivariateNormal(mu1.cpu(), torch.diag(scale1 * scale1).cpu()), obs=y1)
+            obs2 = pyro.sample("obs2", dist.MultivariateNormal(mu2.cpu(), torch.diag(scale2 * scale2).cpu()), obs=y2)
+        return obs1, obs2
